@@ -1,0 +1,118 @@
+# Install required packages if not already installed
+# install.packages(c("httr", "jsonlite", "jose", "openssl"))
+
+library(httr)
+library(jsonlite)
+library(jose)
+library(openssl)
+
+# Function to generate JWT token
+generate_jwt <- function(credentials) {
+  current_time <- as.integer(Sys.time())
+  exp_time <- current_time + 3600  # Token expires in 1 hour
+  
+  claim <- list(
+    iss = credentials$client_email,
+    sub = credentials$client_email,
+    aud = "https://dialogflow.googleapis.com/",
+    iat = current_time,
+    exp = exp_time
+  )
+  
+  # Convert private key from string to RSA object
+  private_key <- rawToChar(base64_decode(gsub("-----BEGIN PRIVATE KEY-----\n|-----END PRIVATE KEY-----\n|\n", "", credentials$private_key)))
+  
+  # Generate JWT token
+  token <- jwt_encode_sig(claim, private_key, algorithm = "RS256")
+  return(token)
+}
+
+# Main function to detect intent
+detect_intent_text <- function(query, session_id) {
+  tryCatch({
+    # Read credentials from JSON file
+    credentials <- fromJSON("youtubedemo-rwcl-c49bceb83c7f.json")
+    
+    # Set parameters
+    project_id <- credentials$project_id
+    location <- "global"
+    agent_id <- "6c927e85-2e22-4fd8-af7a-f9f8d7e4ed46"
+    language_code <- "en"
+    
+    # Generate JWT token
+    token <- generate_jwt(credentials)
+    
+    # Construct API URL
+    api_url <- sprintf(
+      "https://%s-dialogflow.googleapis.com/v3/projects/%s/locations/%s/agents/%s/sessions/%s:detectIntent",
+      location, project_id, location, agent_id, session_id
+    )
+    
+    # Prepare request body
+    request_body <- list(
+      queryInput = list(
+        text = list(
+          text = query
+        ),
+        languageCode = language_code
+      )
+    )
+    
+    # Make API request
+    response <- POST(
+      url = api_url,
+      add_headers(
+        Authorization = paste("Bearer", token),
+        "Content-Type" = "application/json"
+      ),
+      body = toJSON(request_body, auto_unbox = TRUE),
+      encode = "json"
+    )
+    
+    # Check if request was successful
+    if (http_error(response)) {
+      error_content <- fromJSON(rawToChar(response$content))
+      return(list(
+        status = 0,
+        responses = list("Error: API request failed")
+      ))
+    }
+    
+    # Parse response
+    response_content <- fromJSON(rawToChar(response$content))
+    
+    # Extract text responses
+    text_responses <- c()
+    if (!is.null(response_content$queryResult$responseMessages)) {
+      for (message in response_content$queryResult$responseMessages) {
+        if (!is.null(message$text$text)) {
+          text_responses <- c(text_responses, message$text$text[[1]])
+        }
+      }
+    }
+    
+    # Return formatted response
+    if (length(text_responses) == 0) {
+      return(list(
+        status = 0,
+        responses = list("Error: No response received")
+      ))
+    } else {
+      return(list(
+        status = 1,
+        responses = text_responses
+      ))
+    }
+    
+  }, error = function(e) {
+    print(paste("Error in detect_intent_text:", e$message))
+    return(list(
+      status = 0,
+      responses = list("An error occurred while processing your request")
+    ))
+  })
+}
+
+# Example usage
+result <- detect_intent_text("hi", "abcdefgh-12345678")
+print(result)
